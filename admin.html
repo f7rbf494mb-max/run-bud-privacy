@@ -272,6 +272,7 @@
     .btn-renew  { color: var(--green);  border-color: rgba(74,222,128,.30);  background: var(--green-dim); }
     .btn-approve { color: var(--green); border-color: rgba(74,222,128,.30);  background: var(--green-dim); }
     .btn-reject  { color: var(--red);   border-color: rgba(255,122,122,.30); background: var(--red-dim); }
+    .btn-delete  { color: var(--red);   border-color: rgba(255,122,122,.20); background: transparent; margin-left: auto; }
 
     .spinner {
       display: inline-block;
@@ -383,8 +384,8 @@ import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
-  getFirestore, collection, getDocs, doc, setDoc, updateDoc,
-  query, orderBy, where, serverTimestamp
+  getFirestore, collection, getDocs, doc, setDoc, updateDoc, deleteDoc,
+  writeBatch, query, orderBy, where, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 // ── Firebase init ────────────────────────────────────────
@@ -565,6 +566,9 @@ function buildUserCard(u) {
     if (!adGrant)
       actions.push(`<button class="action-btn btn-renew" data-action="renew" data-uid="${uid}" data-until="${u.proUntil||''}">↻ Rinnova +1 mese</button>`);
   }
+  if (!isAdm) {
+    actions.push(`<button class="action-btn btn-delete" data-action="delete" data-uid="${uid}" data-name="${name}">🗑 Elimina</button>`);
+  }
 
   return `
   <div class="user-card ${isPro ? 'is-pro' : ''}" data-uid="${uid}">
@@ -594,6 +598,13 @@ function attachCardListeners(container) {
 async function handleAction(btn) {
   const action = btn.dataset.action;
   const uid    = btn.dataset.uid;
+
+  // Conferma eliminazione prima di procedere
+  if (action === 'delete') {
+    const name = btn.dataset.name || uid;
+    if (!confirm(`Eliminare i dati Firestore di "${name}"?\n\nRicorda di eliminare anche l'account da Firebase Authentication Console.`)) return;
+  }
+
   const card   = document.querySelector(`[data-uid="${uid}"]`);
   const btns   = card?.querySelectorAll('button');
   btns?.forEach(b => b.disabled = true);
@@ -608,9 +619,10 @@ async function handleAction(btn) {
       case 'reject':     await rejectPayment(uid);   break;
       case 'revoke':     await revokePro(uid);       break;
       case 'renew':      await renewPro(uid, btn.dataset.until); break;
+      case 'delete':     await deleteUser(uid); break;
     }
     await loadUsers();
-    showToast('✅ Operazione completata');
+    showToast(action === 'delete' ? '🗑 Utente eliminato da Firestore' : '✅ Operazione completata');
   } catch(e) {
     showToast('❌ Errore: ' + e.message, true);
     btns?.forEach(b => b.disabled = false);
@@ -654,6 +666,16 @@ async function revokePro(uid) {
     pendingDowngrade: false,
     updatedAt: serverTimestamp(),
   }, { merge: true });
+}
+
+async function deleteUser(uid) {
+  const userRef = doc(db, 'users', uid);
+  // Elimina la sottocollection workouts
+  const workoutsSnap = await getDocs(collection(db, 'users', uid, 'workouts'));
+  const batch = writeBatch(db);
+  workoutsSnap.docs.forEach(d => batch.delete(d.ref));
+  batch.delete(userRef);
+  await batch.commit();
 }
 
 async function renewPro(uid, currentUntil) {
